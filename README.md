@@ -19,9 +19,7 @@ The intended outcome is a more focused job search: instead of repeatedly opening
 - [Sample CSV output](#sample-csv-output)
 - [Reading the results](#reading-the-results)
 - [Coverage, limits, and responsible use](#coverage-limits-and-responsible-use)
-- [Project layout](#project-layout)
 - [Troubleshooting](#troubleshooting)
-- [Security before publishing](#security-before-publishing)
 
 ## What Job Scout does
 
@@ -332,30 +330,6 @@ Review `warnings`, `careers_urls`, and `error` before interpreting an empty resu
 - The run can incur API charges for OpenAI and Tavily. `--limit`, `--max-candidates`, caching, and `--resume` can help manage repeated or exploratory runs.
 - Follow the terms of use and request limits of the services and career sites you access.
 
-## Project layout
-
-```text
-.
-├── job_scout/
-│   ├── __init__.py       # Package metadata/import surface
-│   ├── __main__.py       # Enables `python -m job_scout`
-│   ├── career_sites.py   # Career URL, ATS identity, and page parsing helpers
-│   ├── cli.py            # CLI arguments, input loading, orchestration, CSV export
-│   ├── prompts.py        # Model instructions and fit/ranking policy
-│   ├── ranking.py        # Seniority and ranking helpers
-│   ├── schemas.py        # Validated inputs and workflow data models
-│   ├── settings.py       # Shared defaults, limits, and logging
-│   ├── storage.py        # Checkpoints, stable IDs, and safe file writes
-│   ├── web_client.py     # HTTP, search, rendering, and ATS retrieval
-│   └── workflow.py       # Discovery, retrieval, assessment, and verification steps
-├── .env.example          # Safe template for local API configuration
-├── .gitignore            # Excludes local secrets, profile, resume, and output
-├── companies.example.csv # Example employer input
-├── profile.example.json  # Example candidate preferences
-├── requirements.txt      # Python dependencies
-└── README.md
-```
-
 ## Troubleshooting
 
 | Symptom | Likely cause and next step |
@@ -371,15 +345,3 @@ Review `warnings`, `careers_urls`, and `error` before interpreting an empty resu
 | A result appears stale | Open the employer's posting. Run again without relying on stale checkpoints, or use a fresh output directory. |
 
 For more detail during diagnosis, pass `--log-level DEBUG`. Avoid sharing logs or output JSON publicly without checking for sensitive candidate-derived details.
-
-## Security before publishing
-
-1. Confirm `.env`, real resumes, `profile.json`, `companies.csv`, and generated `output/` are not staged.
-2. Inspect `git status --short` and `git diff --cached` before pushing. `.gitignore` does not remove files that were committed earlier.
-3. Search the repository for API keys and tokens before publishing. If a credential was ever committed or shared publicly, revoke/rotate it with its provider; removing it from the latest commit alone does not make it secret again.
-4. Keep any real candidate profile and generated artifacts private. `candidate_profile.json`, checkpoints, per-company JSON, and logs can disclose resume-derived information.
-5. Consider running a small `--limit` trial with a non-sensitive test profile before a larger paid run.
-
-## License
-
-No license file is included in this repository. Add a license before describing the project as open source or granting reuse rights.
