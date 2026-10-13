@@ -1,0 +1,10 @@
+langgraph>=1.0,<2
+langchain-openai>=1.0,<2
+langsmith>=0.4,<1
+httpx>=0.28,<1
+beautifulsoup4>=4.12,<5
+pydantic>=2.10,<3
+python-dotenv>=1.0,<2
+pypdf>=5,<7
+pytest>=8,<10
+pytest-asyncio>=0.24,<2
