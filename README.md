@@ -1,25 +1,125 @@
 # Job Scout
 
-Job Scout researches public employer career pages, finds software engineering and Forward Deployed Engineer (FDE) openings that may fit a candidate, and exports a ranked, reviewable shortlist. It pairs resume evidence with job descriptions, checks US location eligibility, applies a small set of explicit eligibility rules, rechecks selected job links, and records how much of each company's career site it could inspect.
+> **One project, two stages:** discover and rank public openings, then optionally run independent application workflows for Ashby, Lever, and Greenhouse. Discovery is research-only; the application runners support review-first autofill and explicit submission options.
 
-The intended outcome is a more focused job search: instead of repeatedly opening dozens of company boards, a candidate can review one shortlist with fit evidence, gaps, links, and a company-by-company coverage report. Job Scout is a research assistant; it does not submit applications or make hiring decisions.
-
-> **Illustrative output only:** the sample rows in this README use fictional employers and `.example` URLs. They do not describe real job openings.
+> **Illustrative output:** fictional employers and `.example` URLs in the sample CSV are not real openings.
 
 ## Contents
 
+- [Quick start](#quick-start)
 - [What Job Scout does](#what-job-scout-does)
 - [How the workflow works](#how-the-workflow-works)
 - [Requirements](#requirements)
-- [Quick start](#quick-start)
 - [Configuration](#configuration)
-- [Input files](#input-files)
+- [Application workflow and human review](#application-workflow-and-human-review)
 - [Run options](#run-options)
 - [Output files](#output-files)
 - [Sample CSV output](#sample-csv-output)
 - [Reading the results](#reading-the-results)
 - [Coverage, limits, and responsible use](#coverage-limits-and-responsible-use)
 - [Troubleshooting](#troubleshooting)
+- [Current limitations and potential improvements](#current-limitations-and-potential-improvements)
+
+## Quick start
+
+Run discovery **from the parent directory of `job_scout/`** so that `python -m job_scout` resolves the package. Run application commands **from inside `job_scout/`** (their relative default input paths are project-root relative).
+
+```bash
+cd job_scout
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+python3 -m playwright install chromium
+cp .env.example .env
+cp profile.example.json profile.json
+mkdir -p application_private
+cp application_private_profile.example.json application_private/profile.json
+# Add OPENAI_API_KEY to .env and prepare resume.txt plus application_private/resume.pdf.
+# Add application_private/experience_profile.json if using AI-generated application answers.
+```
+
+Edit `companies.csv` to include target employers (`company,careers_url,official_domain`). When `careers_url` is missing, Tavily discovery requires `TAVILY_API_KEY`. Existing entries in `companies.csv` were preserved.
+
+### 1. Retrieve active listings and rank matches
+
+```bash
+# From the parent directory containing job_scout/:
+python3 -m job_scout.discovery --profile job_scout/profile.json --companies job_scout/companies.csv --output job_scout/output
+# Original command remains supported:
+python3 -m job_scout --profile job_scout/profile.json --companies job_scout/companies.csv --output job_scout/output
+```
+
+Both entry points use the **same unchanged** `discovery/cli.py` → `discovery/scout.py` → `discovery/web.py` pipeline. Re-run to refresh results; `--resume` reuses valid checkpoints (so omit it if you want fresh checks). Look at `output/matches.csv`, `output/company_status.csv` and the diagnostics before applying. `--limit N` limits companies; omitting it targets the whole CSV. `--max-candidates` and `--verify-pool` also limit coverage (see reference).
+
+### 2. Build independent ATS queues
+
+```bash
+# Run these from job_scout/:
+python3 -m application.ashby.build_queue --matches output/matches.csv --output output/ashby_queue.jsonl
+python3 -m application.lever.build_queue --matches output/matches.csv --output output/lever_queue.jsonl
+python3 -m application.greenhouse.build_queue --input output/matches.csv --output output/greenhouse_queue.jsonl
+```
+
+The queue builders use the existing matched results rather than scanning all raw jobs. Check queue contents for accuracy and duplicates before running applications.
+
+### 3. Apply through each independent runner
+
+```bash
+# From job_scout/, after preparing application_private/profile.json,
+# application_private/experience_profile.json and your own PDF resume:
+python3 -m application.ashby.run --queue output/ashby_queue.jsonl --resume application_private/resume.pdf --limit 1 --agent
+python3 -m application.lever.run --queue output/lever_queue.jsonl --resume application_private/resume.pdf --limit 1 --agent
+python3 -m application.greenhouse.run --queue output/greenhouse_queue.jsonl --resume application_private/resume.pdf --limit 1 --agent
+```
+
+### Persistent browser sessions (Ashby and Lever)
+
+Both Ashby and Lever now launch Chromium with an independent persistent profile so site cookies and session preferences can survive between runs. Lever defaults to `application_private/browser_profiles/lever/` and Ashby defaults to `application_private/browser_profiles/ashby/`; neither directory is included in Git. To select a different directory:
+
+```bash
+python3 -m application.lever.run --queue output/lever_queue.jsonl --resume application_private/resume.pdf --limit 1 --agent --browser-profile application_private/browser_profiles/lever
+```
+
+Keep the same `--browser-profile` path between Lever runs. Close other browsers using that profile before launching, because Chromium prevents multiple processes from simultaneously locking one profile. Human CAPTCHA/identity verification is still completed in the visible browser when required; persistent sessions can reduce repeat prompts but cannot guarantee fewer challenges, and this change does not bypass detection or CAPTCHA systems.
+
+By default, these are review-oriented workflows; passing `--allow-submit` enables the existing submission behavior. Only use `--auto-submit-reviewed` in workflows that already support that flag and after checking answers and attachments. Site-specific confirmation, CAPTCHA, and identity checks may need manual input. The code does not bypass them.
+
+**Backward compatibility:** `python3 -m application.apply` still launches Greenhouse; `python3 -m application.extract` still builds the Greenhouse queue. Existing Ashby and Lever commands remain the same.
+
+### Full example commands (optional auto-submission flags)
+
+Only use submission flags after you have reviewed candidate answers, attachments, and the relevant site's terms. These are examples and do not submit anything until executed locally.
+
+```bash
+python3 -m compileall -q application
+
+# Greenhouse (legacy-compatible entry point)
+python3 -m application.apply \
+  --queue output/greenhouse_queue.jsonl \
+  --profile application_private/profile.json \
+  --resume application_private/resume.pdf \
+  --experience application_private/experience_profile.json \
+  --limit 21 --agent --allow-submit \
+  --gmail-delay 5 --gmail-wait 120 --gmail-minutes 15
+
+# Lever
+python3 -m application.lever.run \
+  --queue output/lever_queue.jsonl \
+  --profile application_private/profile.json \
+  --resume application_private/resume.pdf \
+  --experience application_private/experience_profile.json \
+  --limit 1 --agent --allow-submit --auto-submit-reviewed
+
+# Ashby
+python3 -m application.ashby.run \
+  --queue output/ashby_queue.jsonl \
+  --profile application_private/profile.json \
+  --resume application_private/resume.pdf \
+  --experience application_private/experience_profile.json \
+  --limit 25 --agent --allow-submit --auto-submit-reviewed
+```
+
+The availability of flags can vary by runner. Use `python3 -m application.<ats>.run --help` to verify options before running.
 
 ## What Job Scout does
 
@@ -67,61 +167,6 @@ The language model makes judgment calls for classification and fit. Scores are u
 - Optional: a LangSmith account/key for tracing model and graph calls
 
 Supported ATS retrieval includes Greenhouse, Lever, Ashby, SmartRecruiters, and Workday. Some Eightfold and iCIMS pages may be handled through available page-level retrieval. Coverage varies by employer and can change when a site changes its interface or blocks requests.
-
-## Quick start
-
-### 1. Create and activate a virtual environment
-
-```bash
-python -m venv .venv
-source .venv/bin/activate
-```
-
-On Windows PowerShell:
-
-```powershell
-py -3.11 -m venv .venv
-.venv\Scripts\Activate.ps1
-```
-
-### 2. Install dependencies
-
-```bash
-python -m pip install --upgrade pip
-pip install -r requirements.txt
-```
-
-### 3. Configure API keys
-
-```bash
-cp .env.example .env
-```
-
-Edit `.env` and add your own credentials. `.env` is ignored by Git. `OPENAI_API_KEY` is required. Add `TAVILY_API_KEY` if you want automatic career-page discovery or supplemental search fallback. If you do not use Tavily, include a valid `careers_url` for every company.
-
-### 4. Prepare a private resume and profile
-
-```bash
-cp profile.example.json profile.json
-```
-
-Put your resume in a UTF-8 plain-text `.txt` file. The example expects `resume.txt` next to `profile.json`; update `resume_path` if you use a different path. Keep real profile and resume files out of the public repository.
-
-### 5. Prepare the company list
-
-```bash
-cp companies.example.csv companies.csv
-```
-
-Replace the example company with your target employers. Include `careers_url` when you already know the official public careers page.
-
-### 6. Run Job Scout
-
-```bash
-python -m job_scout --profile profile.json --companies companies.csv --resume
-```
-
-Review `output/matches.csv` and `output/company_status.csv`. Use `python -m job_scout --help` for the full list of options.
 
 ## Configuration
 
@@ -186,6 +231,113 @@ Example Company
 Another Example
 ```
 
+## Application workflow and human review
+
+The application stage is **separate from discovery**. Discovery produces `output/matches.csv`; each ATS queue builder extracts matching entries into a JSONL file; the matching runner then opens each application in a visible browser. Queue extraction itself never submits applications.
+
+### Prepare private application inputs
+
+From inside `job_scout/`:
+
+```bash
+python3 --version                         # Python 3.11+
+python3 -m pip install -r requirements.txt
+python3 -m pip install playwright
+python3 -m playwright install chromium
+mkdir -p application_private
+cp application_private_profile.example.json application_private/profile.json
+ls -lh application_private/resume.pdf
+```
+
+The **discovery profile** (`profile.json`) describes resume-based matching and references a UTF-8 text resume. The **application profile** (`application_private/profile.json`) supplies reviewed application-form details and is deliberately separate. A PDF resume is used for application uploads, and `application_private/experience_profile.json` may supply additional verified work evidence. Keep all personal data out of Git.
+
+To verify that Chromium launches:
+
+```bash
+python3 -c "from playwright.sync_api import sync_playwright; p=sync_playwright().start(); b=p.chromium.launch(); print('Chromium OK'); b.close(); p.stop()"
+```
+
+If the application agent needs OpenAI, configure `OPENAI_API_KEY` in `.env` (or the local environment); never commit credentials.
+
+### Greenhouse queue and backward-compatible commands
+
+The current organized Greenhouse entry points are `application.greenhouse.build_queue` and `application.greenhouse.run`. The older commands remain available:
+
+```bash
+# Build a queue of up to ten Greenhouse matches (legacy command)
+python3 -m application.extract \
+  --input output/matches.csv \
+  --output output/greenhouse_queue.jsonl \
+  --limit 10
+
+# Fill the first Greenhouse application without authorizing submission
+python3 -m application.apply \
+  --queue output/greenhouse_queue.jsonl \
+  --profile application_private/profile.json \
+  --resume application_private/resume.pdf \
+  --limit 1
+```
+
+A queue item can include the employer, title, posting URL, ATS job ID, source, fit score, overall rank, and application status. Inspect queues for duplicate or stale links before applying.
+
+### What happens when an application runner starts
+
+1. Playwright opens the relevant job page in a visible Chromium window.
+2. The runner locates the application form and attempts to fill supported fields using the applicant profile.
+3. A supported file input receives the resume PDF.
+4. Previously approved answers may be reused; optional `--agent` mode supports matching semantically equivalent questions against reviewed evidence.
+5. Unknown questions, custom fields, and CAPTCHA or identity challenges may require human input in the browser or terminal.
+6. Submission depends on the particular runner's flags and review/approval flow. Do not infer success from a click alone: check the on-page confirmation or recorded outcome.
+
+For example, a saved answer to “How many years have you worked with Python?” might be relevant to “What is your total Python development experience?”, but the system should not fabricate a number. Employment history and technical claims must be supported by the user's evidence. Legal authorizations, sponsorship, demographic declarations, and consent should be answered using explicitly reviewed facts, not guessed by a language model.
+
+### Reusable answers and application history
+
+The legacy Greenhouse MVP describes these local paths:
+
+```text
+application_private/answers.json         # Saved, reviewed answers
+application_private/applications.jsonl   # Application activity/history
+```
+
+Other ATS implementations may have their own storage and naming conventions. Use a consistent working directory so reusable answer stores can be located between runs. Review company-specific responses each time; an answer correct for one posting may be inappropriate for another.
+
+### Human-in-the-loop decision flow
+
+```text
+Form question
+    ↓
+Exact approved answer available? ── Yes → Prefill for review
+    │ No
+    ↓
+Agent finds a reliable evidence-backed answer? ── Yes → Prefill for review
+    │ No
+    ↓
+Ask candidate / request manual completion
+    ↓
+Review responses, attachments and required declarations
+    ↓
+Submission allowed by runner settings and review flow?
+    ├── No → Leave unsubmitted
+    └── Yes → Submit → Check confirmation → Record outcome
+```
+
+The original Greenhouse MVP required the person to type `SUBMIT` when `--allow-submit` was enabled. Newer runner options such as `--auto-submit-reviewed` can change the approval flow where supported, so consult each runner's `--help` and validate on a single application first. **Do not assume all three ATS implementations have identical submission or confirmation behavior.**
+
+### Responsibilities by mode
+
+| Task | Primary mode |
+| --- | --- |
+| Discover, normalize and rank public jobs | Discovery pipeline and model-assisted assessment |
+| Select ATS matches and build queues | Deterministic extraction |
+| Find conventional form fields, fill known details and upload PDF | Browser automation |
+| Look up an exact previously approved answer | Deterministic answer memory |
+| Identify paraphrased questions and propose supported responses | Optional agentic matching |
+| Supply unknown information, legal declarations and approvals | Candidate review / manual input |
+| Submit when enabled; record and verify confirmation | ATS-specific runner, with human verification where needed |
+
+Application auto-submit settings increase the need for accurate profile facts, duplicate checks and a verified confirmation workflow. Begin with `--limit 1` and without `--allow-submit` before attempting a larger batch.
+
 ## Run options
 
 ```text
@@ -212,10 +364,10 @@ python -m job_scout --profile PROFILE --companies COMPANIES [options]
 Example: test two companies with more retrieval capacity and verbose logs:
 
 ```bash
-python -m job_scout \
-  --profile profile.json \
-  --companies companies.csv \
-  --output output \
+python -m job_scout.discovery \
+  --profile job_scout/profile.json \
+  --companies job_scout/companies.csv \
+  --output job_scout/output \
   --limit 2 \
   --max-pages 80 \
   --log-level DEBUG
@@ -224,7 +376,7 @@ python -m job_scout \
 To rerun using saved checkpoints:
 
 ```bash
-python -m job_scout --profile profile.json --companies companies.csv --resume
+python -m job_scout.discovery --profile job_scout/profile.json --companies job_scout/companies.csv --output job_scout/output --resume
 ```
 
 Use the same output directory and the same inputs when resuming. To force a clean run, choose a new output directory or remove the old generated output after reviewing it.
@@ -242,7 +394,7 @@ Then pass `--render`. Rendering can help with some JavaScript-heavy pages, but i
 
 ## Output files
 
-By default, Job Scout writes to `output/`:
+By default, Job Scout discovery writes to `output/`:
 
 | File or directory | Contents |
 | --- | --- |
@@ -285,7 +437,7 @@ The CSV is written as UTF-8 with a byte-order mark for common spreadsheet compat
 
 ## Sample CSV output
 
-The following is **fabricated sample data** illustrating the column layout only. Scores and explanations do not represent actual Job Scout results.
+The following is **fabricated sample data** illustrating discovery output columns only. Scores and explanations do not represent actual Job Scout results.
 
 ```csv
 overall_rank,application_priority,company,company_rank,title,role,seniority,location,fit_score,job_url,why_match,matched_skills,gaps,required_experience,us_eligible,sponsorship,source,posted_at,link_verified,checked_at
@@ -319,12 +471,12 @@ Review `warnings`, `careers_urls`, and `error` before interpreting an empty resu
 
 ## Coverage, limits, and responsible use
 
-- Job Scout only researches public career information. It does not sign into accounts, bypass access controls, submit applications, contact recruiters, or make hiring decisions.
+- The discovery module researches public career information and does not submit applications, sign into accounts, contact recruiters, or make hiring decisions. Separate application runners can interact with job forms and submit applications only when their submission options are enabled; they do not bypass access controls.
 - Career-site markup and ATS interfaces can change. Some employers block automated requests, return incomplete results, or require JavaScript rendering. Review warnings and coverage status.
 - Workday retrieval uses an undocumented interface and is best-effort. Optional rendering may improve some pages but cannot guarantee coverage.
 - Search results and extracted listings can be stale or incomplete. Verify each posting and its requirements directly with the employer before acting.
 - Role classification, experience extraction, and fit scores are model-generated. Check citations/evidence in the source posting and resume yourself.
-- A `sponsorship` value of `not_excluded_by_jd` is deliberately narrow. Job Scout does not research employer sponsorship history or infer an individual's immigration status.
+- A `sponsorship` value of `not_excluded_by_jd` is deliberately narrow. The discovery module does not research employer sponsorship history or infer an individual's immigration status.
 - “US eligible” means the posting appears to allow work in at least one US location. It does not establish personal work authorization, relocation eligibility, or legal eligibility to work.
 - The configured experience exclusion applies to a stated **required minimum** above six years. Preferred experience is not an exclusion. Roles with no stated required minimum remain eligible for assessment.
 - The run can incur API charges for OpenAI and Tavily. `--limit`, `--max-candidates`, caching, and `--resume` can help manage repeated or exploratory runs.
@@ -342,6 +494,22 @@ Review `warnings`, `careers_urls`, and `error` before interpreting an empty resu
 | Site returns blocked/incomplete warnings | The employer may be limiting automated retrieval. Try a known public board URL, lower `--concurrency`, or review the site's public listings manually. |
 | Some roles are absent | The maximum candidate and verification pools are capped. Increase `--max-candidates` and/or `--verify-pool`; use `--max-candidates 0` to assess every relevant retrieved job. |
 | `playwright` or browser error | Install Playwright and Chromium in the active virtual environment, then rerun with `--render`. |
+| `zsh: command not found: python` | Use `python3`, especially on macOS, or activate the correct virtual environment. |
+| `ModuleNotFoundError: No module named 'job_scout'` | Run `python3 -m job_scout.discovery` from the parent of the `job_scout/` package; run `python3 -m application.*` inside the project root. |
+| `BrowserType.launch: Executable doesn't exist` | Run `python3 -m playwright install chromium` using the same Python environment as the runner. |
+| `No module named 'playwright'` | Install with `python3 -m pip install playwright` and install Chromium. |
+| Application queue missing | Build the corresponding ATS queue, then check `ls -lh output/*_queue.jsonl`. |
+| Application resume/profile missing | Check `ls -lh application_private/` and pass correct `--profile`, `--resume`, and `--experience` paths. |
+| Browser opens but fields remain blank | Look for an Apply button, embedded iframe, custom controls, delayed or conditional fields, or selector changes; review manually. |
+| CAPTCHA or browser verification appears | Complete it manually in the visible browser; do not bypass access controls or CAPTCHA. |
+| Persistent profile is locked | Close another Chromium instance using the same `--browser-profile` directory. |
 | A result appears stale | Open the employer's posting. Run again without relying on stale checkpoints, or use a fresh output directory. |
 
 For more detail during diagnosis, pass `--log-level DEBUG`. Avoid sharing logs or output JSON publicly without checking for sensitive candidate-derived details.
+
+
+## Current limitations and potential improvements
+
+Discovery is best-effort and can miss jobs because of retrieval limits, dynamic sites, or ranking caps. Application forms change regularly and may include unsupported dynamic controls, iframes, conditional fields, or site-specific verification. Although Ashby and Lever now use persistent browser profiles, **a remembered profile does not mean that every login or CAPTCHA will persist**. Answer memory is local, and submission receipts and duplicate protection should be verified rather than assumed.
+
+Potential improvements described in the older Greenhouse MVP include durable application state/checkpointing; an explicit `queued → filling → needs_input → ready_for_review → submitted → verified` status flow; better question-confidence checks; stronger selectors and conditional-field support; confirmation and duplicate-submission safeguards; and an optional review dashboard. These are roadmap ideas, **not claims that all these features are already implemented**. Ashby and Lever workflows are already present, so the older proposal to add those providers is obsolete.

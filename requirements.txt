@@ -8,3 +8,4 @@ python-dotenv>=1.0,<2
 pypdf>=5,<7
 pytest>=8,<10
 pytest-asyncio>=0.24,<2
+playwright>=1.50,<2

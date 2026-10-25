@@ -1,7 +1,21 @@
+# Credentials and personal application data
 .env
-.venv/
-__pycache__/
-.pytest_cache/
+.env.*
+!.env.example
+application_private/
+profile.json
+resume.txt
+*.pdf
+# Generated application and discovery results
 output/
+output-*/
 archieve/
-examples/
+# Local tools / OS
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.DS_Store
+.idea/
+.vscode/
